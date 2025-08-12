@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>永政心灵呵护 - 留言管理后台</title>
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-Y9FGWFRHBP"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'G-Y9FGWFRHBP');
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <!-- 修正：引入包含 LiveQuery 功能的 SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4/dist/av-live-query-min.js"></script>
+    
+    <style>
+        body { font-family: 'Noto Sans SC', sans-serif; }
+        .message-card { transition: all 0.3s ease; }
+        .message-card.is-read { background-color: #f7fafc; border-left-color: #cbd5e0; }
+        .message-card.is-read h3, .message-card.is-read .contact-info { color: #718096; }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <!-- 所有其他内容，包括登录框、主内容区、JavaScript代码，都和之前完全一样，无需改动 -->
+    <!-- ... -->
+    <!-- 密码保护层 -->
+    <div id="password-protection" class="fixed inset-0 bg-gray-800 bg-opacity-95 flex items-center justify-center z-50">
+        <div class="bg-white p-8 rounded-lg shadow-2xl text-center w-full max-w-sm">
+            <h2 class="text-2xl font-bold mb-4">后台管理</h2>
+            <p class="text-gray-600 mb-6">请输入管理员凭证</p>
+            <input type="text" id="username-input" class="w-full px-4 py-2 border border-gray-300 rounded-lg mb-4 text-center" placeholder="管理员用户名/邮箱">
+            <input type="password" id="password-input" class="w-full px-4 py-2 border border-gray-300 rounded-lg mb-4 text-center" placeholder="管理员密码">
+            <button id="password-submit" class="w-full bg-blue-600 text-white font-bold py-2 rounded-lg hover:bg-blue-700 transition">授权进入</button>
+            <p id="password-error" class="text-red-500 text-sm mt-2 hidden">凭证错误或网络问题！</p>
+        </div>
+    </div>
+
+    <!-- 主内容区 -->
+    <div id="main-content" class="hidden">
+        <header class="bg-white shadow-md">
+            <div class="container mx-auto px-4 py-4 flex flex-wrap justify-between items-center gap-y-3">
+                <h1 class="text-xl md:text-2xl font-bold text-blue-600">留言管理后台</h1>
+                <div class="flex items-center space-x-4">
+                    <div id="unread-counter-badge" class="hidden items-center bg-red-500 text-white text-sm font-bold px-3 py-1 rounded-full">
+                        <span id="unread-count">0</span>
+                        <span>条新消息</span>
+                    </div>
+                    <div class="text-right">
+                        <p id="admin-username" class="font-semibold">李永政老师</p>
+                        <p class="text-sm text-gray-500">欢迎您！</p>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <main class="container mx-auto px-6 py-8">
+            <div id="loading-indicator" class="text-center py-10">
+                <p class="text-gray-500">正在加载留言...</p>
+            </div>
+            <div id="messages-container" class="space-y-6"></div>
+            <div id="no-messages" class="hidden text-center py-10 border-2 border-dashed rounded-lg">
+                <p class="text-gray-500">暂无任何留言</p>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        AV.init({
+          appId: 'zEVHtGuM28A6M1HQocO0a5ah-gzGzoHsz',
+          appKey: 'HfEmEHsJxTCNkF6nbCNU42ef',
+          serverURL: "https://zevhtgum.lc-cn-n1-shared.com"
+        });
+
+        const protectionModal = document.getElementById('password-protection');
+        const mainContent = document.getElementById('main-content');
+        const usernameInput = document.getElementById('username-input');
+        const passwordInput = document.getElementById('password-input');
+        const submitButton = document.getElementById('password-submit');
+        const errorDisplay = document.getElementById('password-error');
+        const messagesContainer = document.getElementById('messages-container');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const noMessages = document.getElementById('no-messages');
+        const unreadCounterBadge = document.getElementById('unread-counter-badge');
+        const unreadCountSpan = document.getElementById('unread-count');
+        const adminUsernameSpan = document.getElementById('admin-username');
+
+        let liveQuery = null;
+
+        const AdminApp = {
+            init() {
+                const currentUser = AV.User.current();
+                if (currentUser) {
+                    this.showMainContent();
+                    this.listenToMessages();
+                } else {
+                    this.showLogin();
+                }
+                this.bindLoginEvents();
+            },
+
+            showLogin() {
+                protectionModal.style.display = 'flex';
+                mainContent.style.display = 'none';
+                if (liveQuery) {
+                    liveQuery.unsubscribe();
+                    liveQuery = null;
+                }
+            },
+            
+            showMainContent() {
+                protectionModal.style.display = 'none';
+                mainContent.style.display = 'block';
+                const currentUser = AV.User.current();
+                adminUsernameSpan.textContent = "李永政老师";
+            },
+
+            bindLoginEvents() {
+                const handleLogin = async () => {
+                    const username = usernameInput.value;
+                    const password = passwordInput.value;
+                    errorDisplay.classList.add('hidden');
+                    try {
+                        const user = await AV.User.logIn(username, password);
+                        this.showMainContent();
+                        this.listenToMessages();
+                    } catch (error) {
+                        console.error("Login failed:", error);
+                        errorDisplay.classList.remove('hidden');
+                    }
+                };
+                submitButton.addEventListener('click', handleLogin);
+                passwordInput.addEventListener('keyup', (e) => e.key === 'Enter' && handleLogin());
+                usernameInput.addEventListener('keyup', (e) => e.key === 'Enter' && handleLogin());
+            },
+
+            async listenToMessages() {
+                if (liveQuery) return; // 防止重复监听
+
+                const query = new AV.Query('Messages');
+                query.descending('createdAt');
+                
+                liveQuery = await query.subscribe();
+
+                const renderMessages = async () => {
+                    try {
+                        const messages = await query.find();
+                        loadingIndicator.style.display = 'none';
+                        messagesContainer.innerHTML = '';
+                        noMessages.classList.toggle('hidden', !!messages.length);
+                        let unreadCount = 0;
+                        messages.forEach(msg => {
+                            if (!msg.get('isRead')) unreadCount++;
+                            this.createMessageCard(msg);
+                        });
+                        this.updateUnreadCounter(unreadCount);
+                    } catch (error) {
+                         console.error("Error fetching messages:", error);
+                         if (error.code === 401 || error.code === 403) {
+                             messagesContainer.innerHTML = '<p class="text-center text-red-500">权限不足，无法读取留言。请检查 Messages Class 的 find 和 get 权限是否已对管理员角色开放。</p>';
+                             noMessages.classList.add('hidden');
+                             loadingIndicator.style.display = 'none';
+                         }
+                    }
+                };
+                
+                renderMessages(); 
+
+                liveQuery.on('create', renderMessages);
+                liveQuery.on('update', renderMessages);
+                liveQuery.on('delete', renderMessages);
+
+                this.bindMessageCardEvents();
+            },
+            
+            createMessageCard(msg) {
+                const msgData = msg.attributes;
+                const isRead = !!msgData.isRead;
+                const card = document.createElement('div');
+                card.className = `message-card bg-white p-6 rounded-lg shadow-md border-l-4 ${isRead ? 'is-read border-gray-300' : 'border-blue-500'}`;
+                card.dataset.id = msg.id;
+                const date = msg.createdAt ? new Date(msg.createdAt).toLocaleString('zh-CN') : '未知时间';
+                const contactInfo = msgData.contact || '';
+                let contactHtml = contactInfo.includes('@') ? `<a href="mailto:${contactInfo}" class="text-blue-600 hover:underline">${contactInfo}</a>`
+                    : /^\d+$/.test(contactInfo) && contactInfo.length >= 7 ? `<a href="tel:${contactInfo}" class="text-blue-600 hover:underline">${contactInfo}</a>`
+                    : contactInfo;
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-4 flex-wrap gap-2">
+                        <div>
+                            <h3 class="text-xl font-bold ${isRead ? '' : 'text-gray-800'}">${msgData.name}</h3>
+                            <p class="text-sm text-gray-500 contact-info">联系方式: ${contactHtml}</p>
+                            <p class="text-sm text-gray-500">留言时间: ${date}</p>
+                        </div>
+                        <div class="flex space-x-2 flex-shrink-0">
+                            <button class="toggle-read-btn text-sm ${isRead ? 'bg-yellow-400 hover:bg-yellow-500' : 'bg-green-500 hover:bg-green-600'} text-white px-3 py-1 rounded-full">${isRead ? '标为未读' : '标为已读'}</button>
+                            <button class="delete-btn bg-red-500 text-white px-3 py-1 rounded-full text-sm hover:bg-red-600">删除</button>
+                        </div>
+                    </div>
+                    <div class="text-gray-700 whitespace-pre-wrap">${msgData.message}</div>
+                `;
+                messagesContainer.appendChild(card);
+            },
+            
+            updateUnreadCounter(count) {
+                if (count > 0) {
+                    unreadCountSpan.textContent = count;
+                    unreadCounterBadge.classList.remove('hidden');
+                    unreadCounterBadge.classList.add('inline-flex');
+                } else {
+                    unreadCounterBadge.classList.add('hidden');
+                }
+            },
+
+            bindMessageCardEvents() {
+                 messagesContainer.addEventListener('click', async (e) => {
+                    const card = e.target.closest('.message-card');
+                    if (!card) return;
+                    const messageId = card.dataset.id;
+                    const messageObject = AV.Object.createWithoutData('Messages', messageId);
+                    if (e.target.classList.contains('toggle-read-btn')) {
+                        messageObject.set('isRead', !card.classList.contains('is-read'));
+                        await messageObject.save();
+                    }
+                    if (e.target.classList.contains('delete-btn')) {
+                        if (confirm(`确定要永久删除这条来自【${card.querySelector('h3').textContent}】的留言吗？`)) {
+                            await messageObject.destroy();
+                        }
+                    }
+                });
+            }
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            AdminApp.init();
+        });
+    </script>
+</body>
+</html>
